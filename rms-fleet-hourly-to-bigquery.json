@@ -1,0 +1,221 @@
+{
+    "nodes": [
+        {
+            "parameters": {
+                "url": "https://rms.teltonika-networks.com/api/devices",
+                "authentication": "genericCredentialType",
+                "genericAuthType": "httpBearerAuth",
+                "sendQuery": true,
+                "queryParameters": {
+                    "parameters": [
+                        {
+                            "name": "limit",
+                            "value": "100"
+                        },
+                        {
+                            "name": "sort",
+                            "value": "id"
+                        },
+                        {
+                            "name": "fields",
+                            "value": "id,name,serial,imei,company_id,status,signal,rsrp,rsrq,sinr,rscp,ecio,connection_type,connection_state,operator,network_state,cell_id,tac,temperature,model,firmware,wan_state,last_update_at,monitoring_enabled,sent,received"
+                        }
+                    ]
+                },
+                "sendHeaders": true,
+                "headerParameters": {
+                    "parameters": [
+                        {
+                            "name": "accept",
+                            "value": "application/json"
+                        }
+                    ]
+                },
+                "options": {
+                    "response": {
+                        "response": {
+                            "responseFormat": "json"
+                        }
+                    },
+                    "pagination": {
+                        "pagination": {
+                            "parameters": {
+                                "parameters": [
+                                    {
+                                        "name": "offset",
+                                        "value": "={{ $pageCount * 100 }}"
+                                    }
+                                ]
+                            },
+                            "paginationCompleteWhen": "other",
+                            "completeExpression": "={{ (($response.body.data) ?? ($response.body[0] && $response.body[0].data) ?? []).length < 100 }}",
+                            "limitPagesFetched": true,
+                            "maxRequests": 10
+                        }
+                    },
+                    "timeout": 30000
+                }
+            },
+            "id": "f3c3df13-1b29-42cf-8536-fabb41fe0d07",
+            "name": "Get Devices",
+            "type": "n8n-nodes-base.httpRequest",
+            "typeVersion": 4.2,
+            "position": [
+                -1488,
+                2384
+            ],
+            "retryOnFail": true,
+            "maxTries": 3,
+            "waitBetweenTries": 5000,
+            "credentials": {
+                "httpBearerAuth": {
+                    "id": "pTGV51JRhgZUL5lq",
+                    "name": "Teltonika - RMS - API"
+                }
+            },
+            "notes": "Fields trimmed to only what we store. Dropped: router_uptime, connection_uptime, last_connection_at, dynamic_monitoring."
+        },
+        {
+            "parameters": {
+                "fieldToSplitOut": "data",
+                "options": {}
+            },
+            "id": "a08895be-ee99-409b-b96a-e967992724b8",
+            "name": "Split Devices",
+            "type": "n8n-nodes-base.splitOut",
+            "typeVersion": 1,
+            "position": [
+                -1248,
+                2384
+            ]
+        },
+        {
+            "parameters": {
+                "jsCode": "// One row per device per hourly poll. No uptime/downtime here -\n// that gets calculated in Looker Studio from is_online across polled_ts.\nconst now = new Date();\nconst nowIso = now.toISOString();\n\nconst num = (v) =>\n  v === null || v === undefined || v === '' || v === 'N/A' ? null : Number(v);\n\nconst ts = (s) => {\n  const t = new Date(String(s || '').replace(' ', 'T') + 'Z');\n  return Number.isNaN(t.getTime()) ? null : t;\n};\n\nreturn $input.all().map(({ json: d }) => {\n  const devTs = ts(d.last_update_at);\n  // 1 = online, 0 = offline, anything else = unknown (kept as null so a\n  // bad poll doesn't get counted as downtime in the report).\n  const online = d.status === 1 ? true : d.status === 0 ? false : null;\n\n  return {\n    json: {\n      device_id: d.id,\n      polled_ts: nowIso,                          // the run timestamp\n      device_ts: devTs ? devTs.toISOString() : null, // RMS data freshness\n      is_online: online,\n\n      name: d.name || null,\n      serial: d.serial || null,\n      imei: d.imei || null,\n      model: d.model || null,\n      firmware: d.firmware || null,\n      company_id: d.company_id ?? null,\n\n      rssi_dbm: num(d.signal),\n      rsrp_dbm: num(d.rsrp),\n      rsrq_db: num(d.rsrq),\n      sinr_db: num(d.sinr),\n      rscp_dbm: num(d.rscp),\n      ecio_db: num(d.ecio),\n\n      conn_type: d.connection_type || null,\n      conn_state: d.connection_state || null,\n      operator: d.operator || null,\n      network_state: d.network_state || null,\n      wan_state: d.wan_state || null,\n      cell_id: d.cell_id || null,\n      tac: d.tac === 'N/A' ? null : d.tac || null,\n      temp_c: num(d.temperature),\n      sent_bytes: num(d.sent),\n      received_bytes: num(d.received),\n\n      monitoring_enabled: d.monitoring_enabled ?? null,\n    },\n  };\n});"
+            },
+            "id": "ab988215-dd43-4c4f-880f-50c12b428610",
+            "name": "Normalise",
+            "type": "n8n-nodes-base.code",
+            "typeVersion": 2,
+            "position": [
+                -1008,
+                2384
+            ]
+        },
+        {
+            "parameters": {
+                "authentication": "serviceAccount",
+                "operation": "insert",
+                "projectId": {
+                    "__rl": true,
+                    "value": "macmobile-415807",
+                    "mode": "id"
+                },
+                "datasetId": {
+                    "__rl": true,
+                    "value": "mac_hardware_wh",
+                    "mode": "id"
+                },
+                "tableId": {
+                    "__rl": true,
+                    "value": "mac_teltonika_rms",
+                    "mode": "id"
+                },
+                "options": {
+                    "ignoreUnknownValues": true,
+                    "skipInvalidRows": false
+                }
+            },
+            "id": "75f66233-e924-46b2-9c51-9b3f797aa684",
+            "name": "BigQuery Insert1",
+            "type": "n8n-nodes-base.googleBigQuery",
+            "typeVersion": 2.1,
+            "position": [
+                -768,
+                2384
+            ],
+            "retryOnFail": true,
+            "maxTries": 3,
+            "waitBetweenTries": 5000,
+            "credentials": {
+                "googleApi": {
+                    "id": "xZZ97o0df921j11B",
+                    "name": "Google Service Account account"
+                }
+            },
+            "notes": "Append-only. Key (device_id, polled_ts) is unique by construction. If you create the v2 table, change tableId to mac_teltonika_rms_v2."
+        },
+        {
+            "parameters": {
+                "rule": {
+                    "interval": [
+                        {
+                            "field": "cronExpression",
+                            "expression": "0 7-18 * * *"
+                        }
+                    ]
+                }
+            },
+            "id": "7ced2626-d869-49d5-a1ab-6ef2592c0b50",
+            "name": "Every Hour1",
+            "type": "n8n-nodes-base.scheduleTrigger",
+            "typeVersion": 1.2,
+            "position": [
+                -1712,
+                2384
+            ],
+            "notes": "Runs 7am-6pm hourly. Note: downtime that starts after 6pm and ends before 7am won't be visible. Switch expression to '0 * * * *' if you need 24/7 coverage."
+        }
+    ],
+        "connections": {
+        "Get Devices": {
+            "main": [
+                [
+                    {
+                        "node": "Split Devices",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Split Devices": {
+            "main": [
+                [
+                    {
+                        "node": "Normalise",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Normalise": {
+            "main": [
+                [
+                    {
+                        "node": "BigQuery Insert1",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Every Hour1": {
+            "main": [
+                [
+                    {
+                        "node": "Get Devices",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        }
+    },
+    "pinData": { },
+    "meta": {
+        "templateCredsSetupCompleted": true,
+            "instanceId": "819d5cbfcc6e81cc9f00a90970fa7e33993eabf361fd8c37bc3b7947d9e68a1d"
+    }
+}

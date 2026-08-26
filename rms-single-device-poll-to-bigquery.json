@@ -1,0 +1,227 @@
+{
+    "nodes": [
+        {
+            "parameters": {
+                "rule": {
+                    "interval": [
+                        {
+                            "field": "cronExpression",
+                            "expression": "*/2 * * * *"
+                        }
+                    ]
+                }
+            },
+            "id": "bf97d5b1-0110-44de-8c6f-4ca0345492d4",
+            "name": "Every 5 Minutes",
+            "type": "n8n-nodes-base.scheduleTrigger",
+            "typeVersion": 1.2,
+            "position": [
+                -1664,
+                2640
+            ],
+            "disabled": true,
+            "notes": "Every 5 minutes, 24/7 - so overnight downtime is now visible. For the old business-hours-only behaviour use '*/5 7-18 * * *'."
+        },
+        {
+            "parameters": {
+                "url": "https://rms.teltonika-networks.com/api/devices",
+                "authentication": "genericCredentialType",
+                "genericAuthType": "httpBearerAuth",
+                "sendQuery": true,
+                "queryParameters": {
+                    "parameters": [
+                        {
+                            "name": "limit",
+                            "value": "100"
+                        },
+                        {
+                            "name": "sort",
+                            "value": "id"
+                        },
+                        {
+                            "name": "fields",
+                            "value": "id,name,serial,imei,company_id,status,signal,rsrp,rsrq,sinr,rscp,ecio,connection_type,connection_state,operator,network_state,cell_id,tac,temperature,model,firmware,wan_state,last_update_at,monitoring_enabled,sent,received"
+                        }
+                    ]
+                },
+                "sendHeaders": true,
+                "headerParameters": {
+                    "parameters": [
+                        {
+                            "name": "accept",
+                            "value": "application/json"
+                        }
+                    ]
+                },
+                "options": {
+                    "response": {
+                        "response": {
+                            "responseFormat": "json"
+                        }
+                    },
+                    "pagination": {
+                        "pagination": {
+                            "parameters": {
+                                "parameters": [
+                                    {
+                                        "name": "offset",
+                                        "value": "={{ $pageCount * 100 }}"
+                                    }
+                                ]
+                            },
+                            "paginationCompleteWhen": "other",
+                            "completeExpression": "={{ (($response.body.data) ?? ($response.body[0] && $response.body[0].data) ?? []).length < 100 }}",
+                            "limitPagesFetched": true,
+                            "maxRequests": 10
+                        }
+                    },
+                    "timeout": 30000
+                }
+            },
+            "id": "4ea0692a-1f90-4003-83a5-6d7dfd64430a",
+            "name": "Get Devices1",
+            "type": "n8n-nodes-base.httpRequest",
+            "typeVersion": 4.2,
+            "position": [
+                -1440,
+                2640
+            ],
+            "retryOnFail": true,
+            "maxTries": 3,
+            "waitBetweenTries": 5000,
+            "credentials": {
+                "httpBearerAuth": {
+                    "id": "pTGV51JRhgZUL5lq",
+                    "name": "Teltonika - RMS - API"
+                }
+            },
+            "disabled": true,
+            "notes": "Still fetches the full device list; the SD-GEN072 filter happens in Normalise. Once you know the numeric RMS id for SD-GEN072 you can change the URL to https://rms.teltonika-networks.com/api/devices/<id> and drop pagination entirely - worth doing at a 5-minute cadence."
+        },
+        {
+            "parameters": {
+                "fieldToSplitOut": "data",
+                "options": {}
+            },
+            "id": "b5632c83-3b15-421b-98c7-ad551babbfc2",
+            "name": "Split Devices1",
+            "type": "n8n-nodes-base.splitOut",
+            "typeVersion": 1,
+            "position": [
+                -1200,
+                2640
+            ],
+            "disabled": true
+        },
+        {
+            "parameters": {
+                "jsCode": "// One row per poll for a single device (SD-GEN072).\n// No uptime/downtime here - that gets calculated in Looker Studio from\n// is_online across polled_ts.\n\n// Change this (or add more names to the array) to widen the scope.\nconst TARGET_NAMES = ['SD-GEN072'];\n\nconst wanted = new Set(TARGET_NAMES.map((n) => n.trim().toUpperCase()));\nconst matches = (d) => wanted.has(String(d.name || '').trim().toUpperCase());\n\nconst now = new Date();\nconst nowIso = now.toISOString();\n\nconst num = (v) =>\n  v === null || v === undefined || v === '' || v === 'N/A' ? null : Number(v);\n\nconst ts = (s) => {\n  const t = new Date(String(s || '').replace(' ', 'T') + 'Z');\n  return Number.isNaN(t.getTime()) ? null : t;\n};\n\nconst rows = $input.all().filter(({ json: d }) => matches(d));\n\n// Loud failure beats a silently empty table: if the name ever changes in RMS\n// this throws instead of quietly writing nothing for weeks.\nif (rows.length === 0) {\n  throw new Error(\n    `No device matched ${TARGET_NAMES.join(', ')} in the RMS response ` +\n    `(${$input.all().length} devices returned). Check the device name in RMS.`\n  );\n}\n\nreturn rows.map(({ json: d }) => {\n  const devTs = ts(d.last_update_at);\n  // 1 = online, 0 = offline, anything else = unknown (kept as null so a\n  // bad poll doesn't get counted as downtime in the report).\n  const online = d.status === 1 ? true : d.status === 0 ? false : null;\n\n  return {\n    json: {\n      device_id: d.id,\n      polled_ts: nowIso,                          // the run timestamp\n      device_ts: devTs ? devTs.toISOString() : null, // RMS data freshness\n      is_online: online,\n\n      name: d.name || null,\n      serial: d.serial || null,\n      imei: d.imei || null,\n      model: d.model || null,\n      firmware: d.firmware || null,\n      company_id: d.company_id ?? null,\n\n      rssi_dbm: num(d.signal),\n      rsrp_dbm: num(d.rsrp),\n      rsrq_db: num(d.rsrq),\n      sinr_db: num(d.sinr),\n      rscp_dbm: num(d.rscp),\n      ecio_db: num(d.ecio),\n\n      conn_type: d.connection_type || null,\n      conn_state: d.connection_state || null,\n      operator: d.operator || null,\n      network_state: d.network_state || null,\n      wan_state: d.wan_state || null,\n      cell_id: d.cell_id || null,\n      tac: d.tac === 'N/A' ? null : d.tac || null,\n      temp_c: num(d.temperature),\n      sent_bytes: num(d.sent),\n      received_bytes: num(d.received),\n\n      monitoring_enabled: d.monitoring_enabled ?? null,\n    },\n  };\n});"
+            },
+            "id": "e32754d5-2292-4783-a73e-c10afa432bff",
+            "name": "Normalise1",
+            "type": "n8n-nodes-base.code",
+            "typeVersion": 2,
+            "position": [
+                -960,
+                2640
+            ],
+            "disabled": true,
+            "notes": "Filters to SD-GEN072 by name and throws if it isn't found, so a rename in RMS shows up as a failed execution rather than an empty table."
+        },
+        {
+            "parameters": {
+                "authentication": "serviceAccount",
+                "operation": "insert",
+                "projectId": {
+                    "__rl": true,
+                    "value": "macmobile-415807",
+                    "mode": "id"
+                },
+                "datasetId": {
+                    "__rl": true,
+                    "value": "mac_hardware_wh",
+                    "mode": "id"
+                },
+                "tableId": {
+                    "__rl": true,
+                    "value": "mac_teltonika_rms",
+                    "mode": "id"
+                },
+                "options": {
+                    "ignoreUnknownValues": true,
+                    "skipInvalidRows": false
+                }
+            },
+            "id": "917be036-b52a-4aeb-ac28-ce09ea0dd808",
+            "name": "BigQuery Insert2",
+            "type": "n8n-nodes-base.googleBigQuery",
+            "typeVersion": 2.1,
+            "position": [
+                -720,
+                2640
+            ],
+            "retryOnFail": true,
+            "maxTries": 3,
+            "waitBetweenTries": 5000,
+            "credentials": {
+                "googleApi": {
+                    "id": "xZZ97o0df921j11B",
+                    "name": "Google Service Account account"
+                }
+            },
+            "disabled": true,
+            "notes": "Append-only. Key (device_id, polled_ts) is unique by construction. ~288 rows/day for the single device. If you create the v2 table, change tableId to mac_teltonika_rms_v2."
+        }
+    ],
+    "connections": {
+        "Every 5 Minutes": {
+            "main": [
+                [
+                    {
+                        "node": "Get Devices1",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Get Devices1": {
+            "main": [
+                [
+                    {
+                        "node": "Split Devices1",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Split Devices1": {
+            "main": [
+                [
+                    {
+                        "node": "Normalise1",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Normalise1": {
+            "main": [
+                [
+                    {
+                        "node": "BigQuery Insert2",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        }
+    },
+    "pinData": {},
+    "meta": {
+        "templateCredsSetupCompleted": true,
+        "instanceId": "819d5cbfcc6e81cc9f00a90970fa7e33993eabf361fd8c37bc3b7947d9e68a1d"
+    }
+}
