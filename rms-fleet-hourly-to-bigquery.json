@@ -91,7 +91,7 @@
         },
         {
             "parameters": {
-                "jsCode": "// One row per device per hourly poll. No uptime/downtime here -\n// that gets calculated in Looker Studio from is_online across polled_ts.\nconst now = new Date();\nconst nowIso = now.toISOString();\n\nconst num = (v) =>\n  v === null || v === undefined || v === '' || v === 'N/A' ? null : Number(v);\n\nconst ts = (s) => {\n  const t = new Date(String(s || '').replace(' ', 'T') + 'Z');\n  return Number.isNaN(t.getTime()) ? null : t;\n};\n\nreturn $input.all().map(({ json: d }) => {\n  const devTs = ts(d.last_update_at);\n  // 1 = online, 0 = offline, anything else = unknown (kept as null so a\n  // bad poll doesn't get counted as downtime in the report).\n  const online = d.status === 1 ? true : d.status === 0 ? false : null;\n\n  return {\n    json: {\n      device_id: d.id,\n      polled_ts: nowIso,                          // the run timestamp\n      device_ts: devTs ? devTs.toISOString() : null, // RMS data freshness\n      is_online: online,\n\n      name: d.name || null,\n      serial: d.serial || null,\n      imei: d.imei || null,\n      model: d.model || null,\n      firmware: d.firmware || null,\n      company_id: d.company_id ?? null,\n\n      rssi_dbm: num(d.signal),\n      rsrp_dbm: num(d.rsrp),\n      rsrq_db: num(d.rsrq),\n      sinr_db: num(d.sinr),\n      rscp_dbm: num(d.rscp),\n      ecio_db: num(d.ecio),\n\n      conn_type: d.connection_type || null,\n      conn_state: d.connection_state || null,\n      operator: d.operator || null,\n      network_state: d.network_state || null,\n      wan_state: d.wan_state || null,\n      cell_id: d.cell_id || null,\n      tac: d.tac === 'N/A' ? null : d.tac || null,\n      temp_c: num(d.temperature),\n      sent_bytes: num(d.sent),\n      received_bytes: num(d.received),\n\n      monitoring_enabled: d.monitoring_enabled ?? null,\n    },\n  };\n});"
+                "jsCode": "// One row per device per hourly poll. No uptime/downtime here -\n// that gets calculated in Looker Studio from is_online across polled_ts.\nconst now = new Date();\nconst nowIso = now.toISOString();\n\nconst num = (v) =>\n  v === null || v === undefined || v === '' || v === 'N/A' ? null : Number(v);\n\nconst ts = (s) => {\n  const t = new Date(String(s || '').replace(' ', 'T') + 'Z');\n  return Number.isNaN(t.getTime()) ? null : t;\n};\n\nreturn $input.all().map(({ json: d }) => {\n  const devTs = ts(d.last_update_at);\n  // 1 = online, 0 = offline, anything else = unknown (kept as null so a\n  // bad poll doesn't get counted as downtime in the report).\n  const online = d.status === 1 ? true : d.status === 0 ? false : null;\n  // Signal is meaningless (and often stale) once a device is offline, so\n  // only capture it for records where the device is confirmed online.\n  const sig = (v) => (online === true ? num(v) : null);\n\n  return {\n    json: {\n      device_id: d.id,\n      polled_ts: nowIso,                          // the run timestamp\n      device_ts: devTs ? devTs.toISOString() : null, // RMS data freshness\n      is_online: online,\n\n      name: d.name || null,\n      serial: d.serial || null,\n      imei: d.imei || null,\n      model: d.model || null,\n      firmware: d.firmware || null,\n      company_id: d.company_id ?? null,\n\n      rssi_dbm: sig(d.signal),\n      rsrp_dbm: sig(d.rsrp),\n      rsrq_db: sig(d.rsrq),\n      sinr_db: sig(d.sinr),\n      rscp_dbm: sig(d.rscp),\n      ecio_db: sig(d.ecio),\n\n      conn_type: d.connection_type || null,\n      conn_state: d.connection_state || null,\n      operator: d.operator || null,\n      network_state: d.network_state || null,\n      wan_state: d.wan_state || null,\n      cell_id: d.cell_id || null,\n      tac: d.tac === 'N/A' ? null : d.tac || null,\n      temp_c: num(d.temperature),\n      sent_bytes: num(d.sent),\n      received_bytes: num(d.received),\n\n      monitoring_enabled: d.monitoring_enabled ?? null,\n    },\n  };\n});"
             },
             "id": "ab988215-dd43-4c4f-880f-50c12b428610",
             "name": "Normalise",
@@ -167,7 +167,7 @@
             "notes": "Runs 7am-6pm hourly. Note: downtime that starts after 6pm and ends before 7am won't be visible. Switch expression to '0 * * * *' if you need 24/7 coverage."
         }
     ],
-        "connections": {
+    "connections": {
         "Get Devices": {
             "main": [
                 [
@@ -213,9 +213,9 @@
             ]
         }
     },
-    "pinData": { },
+    "pinData": {},
     "meta": {
         "templateCredsSetupCompleted": true,
-            "instanceId": "819d5cbfcc6e81cc9f00a90970fa7e33993eabf361fd8c37bc3b7947d9e68a1d"
+        "instanceId": "819d5cbfcc6e81cc9f00a90970fa7e33993eabf361fd8c37bc3b7947d9e68a1d"
     }
 }
